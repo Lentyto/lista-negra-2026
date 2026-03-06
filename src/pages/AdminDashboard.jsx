@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { sendWebhookNotification } from '../lib/discord'
-import { uploadToCloudinary } from '../lib/cloudinary'
+import { uploadToCloudinary, deleteFromCloudinary } from '../lib/cloudinary'
 import CaseFileModal from '../components/CaseFileModal'
 
 export default function AdminDashboard() {
@@ -15,6 +15,7 @@ export default function AdminDashboard() {
     const [admins, setAdmins] = useState([])
     const [announcements, setAnnouncements] = useState([])
     const [salasItems, setSalasItems] = useState([])
+    const [inboxItems, setInboxItems] = useState([])
     const [lockdown, setLockdown] = useState(false)
     const [loading, setLoading] = useState(true)
     const [statusMessage, setStatusMessage] = useState('')
@@ -73,6 +74,9 @@ export default function AdminDashboard() {
 
         const { data: salasData } = await supabase.from('salas_media').select('*').order('posted_date', { ascending: false })
         setSalasItems(salasData || [])
+
+        const { data: inboxData } = await supabase.from('inbox').select('*').order('created_at', { ascending: false })
+        setInboxItems(inboxData || [])
 
         if (adminRow?.is_super) {
             const { data: adminsData } = await supabase.from('admins').select('*')
@@ -264,6 +268,26 @@ export default function AdminDashboard() {
         await loadData()
     }
 
+    // ── INBOX ──
+    async function handleAcknowledgeInbox(id) {
+        await supabase.from('inbox').delete().eq('id', id)
+        flash('Tip acknowledged & removed')
+        await sendWebhookNotification(user.email, 'Inbox Tip Acknowledged', `Tip ID: ${id}`)
+        await loadData()
+    }
+
+    async function handleDeleteInbox(item) {
+        // Delete from Cloudinary if image exists
+        if (item.cloudinary_public_id) {
+            flash('Deleting from cloud...')
+            await deleteFromCloudinary(item.cloudinary_public_id, item.cloudinary_resource_type || 'image')
+        }
+        await supabase.from('inbox').delete().eq('id', item.id)
+        flash('Tip deleted')
+        await sendWebhookNotification(user.email, 'Inbox Tip Deleted', `Tip ID: ${item.id} (image purged)`)
+        await loadData()
+    }
+
     async function handleLogout() {
         await sendWebhookNotification(user.email, 'Admin Logout', 'Admin logged out of the dashboard.');
         await supabase.auth.signOut()
@@ -280,6 +304,7 @@ export default function AdminDashboard() {
 
     const tabs = [
         { key: 'profiles', label: 'Profiles' },
+        { key: 'inbox', label: `Inbox (${inboxItems.length})` },
         { key: 'announcements', label: 'News' },
         { key: 'salas', label: 'Salas' },
         { key: 'pins', label: 'PINs' },
@@ -413,6 +438,56 @@ export default function AdminDashboard() {
                                                     {profile.capture_video_url && <span className="text-[var(--color-captured)] font-[var(--font-mono)] text-[10px]">✓ Has video</span>}
                                                 </div>
                                             )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {/* ═══════ INBOX ═══════ */}
+                {activeTab === 'inbox' && (
+                    <div className="space-y-6">
+                        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-5">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-sm font-[var(--font-heading)] text-white tracking-wider">Anonymous Tips</h2>
+                                <span className={`font-[var(--font-mono)] text-xs px-2 py-1 rounded border ${inboxItems.length >= 30 ? 'text-[var(--color-accent)] border-[var(--color-accent)]' : 'text-[var(--color-text-muted)] border-[var(--color-border)]'}`}>
+                                    {inboxItems.length}/30
+                                </span>
+                            </div>
+                            {inboxItems.length >= 30 && (
+                                <p className="text-[var(--color-accent)] font-[var(--font-mono)] text-xs mb-4">⚠ Inbox full — new submissions are blocked until tips are cleared.</p>
+                            )}
+                        </div>
+
+                        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded overflow-hidden">
+                            {inboxItems.length === 0 ? (
+                                <p className="p-6 text-[var(--color-text-muted)] font-[var(--font-mono)] text-sm text-center">No tips in the inbox</p>
+                            ) : (
+                                <div className="divide-y divide-[var(--color-border)]">
+                                    {inboxItems.map(item => (
+                                        <div key={item.id} className="p-4">
+                                            <div className="flex gap-4">
+                                                {item.image_url && (
+                                                    <div className="w-24 h-20 shrink-0 bg-[var(--color-surface-light)] rounded overflow-hidden border border-[var(--color-border)]">
+                                                        <img src={item.image_url} alt="" className="w-full h-full object-cover" />
+                                                    </div>
+                                                )}
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-white text-sm whitespace-pre-wrap break-words">{item.message || <span className="text-[var(--color-text-muted)] italic">No message — image only</span>}</p>
+                                                    <p className="text-[var(--color-text-muted)] font-[var(--font-mono)] text-[10px] mt-2">
+                                                        {new Date(item.created_at).toLocaleString()}
+                                                        {item.image_url && ' · 📎 Has attachment'}
+                                                    </p>
+                                                </div>
+                                                <div className="flex flex-col gap-1.5 shrink-0">
+                                                    <button onClick={() => handleAcknowledgeInbox(item.id)}
+                                                        className="text-[var(--color-captured)] hover:bg-[var(--color-captured)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-captured)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Ack</button>
+                                                    <button onClick={() => handleDeleteInbox(item)}
+                                                        className="text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-accent)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Delete</button>
+                                                </div>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
