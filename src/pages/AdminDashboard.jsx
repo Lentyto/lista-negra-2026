@@ -45,6 +45,32 @@ export default function AdminDashboard() {
         setTimeout(() => setStatusMessage(''), 3000)
     }
 
+    async function uploadToCloudinary(file) {
+        const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
+        const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
+
+        if (!cloudName || !uploadPreset) {
+            throw new Error("Cloudinary not configured. Check .env variables.");
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('upload_preset', uploadPreset);
+
+        // 'auto' resource_type handles both images and videos
+        const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await res.json();
+        if (!res.ok) {
+            throw new Error(data.error?.message || 'Cloudinary upload failed');
+        }
+
+        return data.secure_url;
+    }
+
     const loadData = useCallback(async () => {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return navigate('/admin/login', { replace: true })
@@ -87,12 +113,12 @@ export default function AdminDashboard() {
         e.preventDefault()
         let photo_url = null
         if (photoFile) {
-            const ext = photoFile.name.split('.').pop()
-            const fileName = `${Date.now()}.${ext}`
-            const { error: uploadError } = await supabase.storage.from('photos').upload(fileName, photoFile)
-            if (uploadError) { flash('Upload failed: ' + uploadError.message); return }
-            const { data: urlData } = supabase.storage.from('photos').getPublicUrl(fileName)
-            photo_url = urlData.publicUrl
+            try {
+                photo_url = await uploadToCloudinary(photoFile);
+            } catch (err) {
+                flash('Upload failed: ' + err.message);
+                return;
+            }
         }
         if (editingProfileId) {
             const updates = { name: profileForm.name, crime: profileForm.crime, reward: profileForm.reward, priority: profileForm.priority }
@@ -114,7 +140,9 @@ export default function AdminDashboard() {
     }
 
     async function handleDeleteProfile(id, photoUrl) {
-        if (photoUrl) { const path = photoUrl.split('/photos/')[1]; if (path) await supabase.storage.from('photos').remove([path]) }
+        // Cloudinary unauthenticated client-side deletion is not permitted by default.
+        // We will just remove it from the database for now.
+        // If needed, delete logic could be moved to a secure backend endpoint.
         await supabase.from('profiles').delete().eq('id', id)
         flash('Profile deleted')
         await sendWebhookNotification(user.email, 'Delete Profile', `Deleted profile ID: ${id}`)
@@ -139,14 +167,18 @@ export default function AdminDashboard() {
 
     async function handleUploadCaptureVideo(profileId) {
         if (!captureVideoFile) { flash('Select a video'); return }
-        const ext = captureVideoFile.name.split('.').pop()
-        const fileName = `capture_${Date.now()}.${ext}`
-        const { error } = await supabase.storage.from('photos').upload(fileName, captureVideoFile)
-        if (error) { flash('Upload failed'); return }
-        const { data: urlData } = supabase.storage.from('photos').getPublicUrl(fileName)
-        await supabase.from('profiles').update({ capture_video_url: urlData.publicUrl }).eq('id', profileId)
+
+        let videoUrl = null;
+        try {
+            videoUrl = await uploadToCloudinary(captureVideoFile);
+        } catch (err) {
+            flash('Upload failed: ' + err.message);
+            return;
+        }
+
+        await supabase.from('profiles').update({ capture_video_url: videoUrl }).eq('id', profileId)
         flash('Capture video uploaded')
-        await sendWebhookNotification(user.email, 'Uploaded Captiva Video', `Video loaded for target ID ${profileId}`, urlData.publicUrl)
+        await sendWebhookNotification(user.email, 'Uploaded Captiva Video', `Video loaded for target ID ${profileId}`, videoUrl)
         setCaptureVideoFile(null)
         setCapturingProfileId(null)
         await loadData()
@@ -197,22 +229,24 @@ export default function AdminDashboard() {
     async function handleAddSalasMedia(e) {
         e.preventDefault()
         if (!salasFile) { flash('Select a file'); return }
-        const ext = salasFile.name.split('.').pop()
-        const fileName = `salas_${Date.now()}.${ext}`
-        const { error } = await supabase.storage.from('photos').upload(fileName, salasFile)
-        if (error) { flash('Upload failed: ' + error.message); return }
-        const { data: urlData } = supabase.storage.from('photos').getPublicUrl(fileName)
-        await supabase.from('salas_media').insert([{ ...salasForm, media_url: urlData.publicUrl }])
+        let mediaUrl = null;
+        try {
+            mediaUrl = await uploadToCloudinary(salasFile);
+        } catch (err) {
+            flash('Upload failed: ' + err.message);
+            return;
+        }
+
+        await supabase.from('salas_media').insert([{ ...salasForm, media_url: mediaUrl }])
         flash('Uploaded to Salas')
-        await sendWebhookNotification(user.email, 'Loaded to Salas', `Title: ${salasForm.title}`, urlData.publicUrl)
+        await sendWebhookNotification(user.email, 'Loaded to Salas', `Title: ${salasForm.title}`, mediaUrl)
         setSalasForm({ title: '', posted_date: new Date().toISOString().split('T')[0], media_type: 'photo' })
         setSalasFile(null)
         await loadData()
     }
 
     async function handleDeleteSalasItem(item) {
-        const path = item.media_url.split('/photos/')[1]
-        if (path) await supabase.storage.from('photos').remove([path])
+        // Unauthenticated client-side deletion works differently for Cloudinary. We just remove the db record.
         await supabase.from('salas_media').delete().eq('id', item.id)
         flash('Salas item deleted')
         await sendWebhookNotification(user.email, 'Remove Salas Media', `Title: ${item.title} removed`)
