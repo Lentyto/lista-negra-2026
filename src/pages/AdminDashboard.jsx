@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { sendWebhookNotification } from '../lib/discord'
 import { uploadToCloudinary, deleteFromCloudinary } from '../lib/cloudinary'
+import { hasPermission, isGod, PERMISSIONS, PERMISSION_LABELS, PERMISSION_DESCRIPTIONS } from '../lib/permissions'
 import CaseFileModal from '../components/CaseFileModal'
 
 export default function AdminDashboard() {
     const navigate = useNavigate()
     const [user, setUser] = useState(null)
-    const [isSuper, setIsSuper] = useState(false)
+    const [adminRow, setAdminRow] = useState(null)
     const [activeTab, setActiveTab] = useState('profiles')
     const [profiles, setProfiles] = useState([])
     const [pins, setPins] = useState([])
@@ -44,17 +45,22 @@ export default function AdminDashboard() {
     const [salasForm, setSalasForm] = useState({ title: '', posted_date: new Date().toISOString().split('T')[0], media_type: 'photo' })
     const [salasFile, setSalasFile] = useState(null)
 
+    // Permission shorthand
+    const can = (perm) => hasPermission(adminRow, perm)
+    const godMode = isGod(adminRow)
+
     function flash(msg) {
         setStatusMessage(msg)
         setTimeout(() => setStatusMessage(''), 3000)
     }
+
     const loadData = useCallback(async () => {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return navigate('/admin/login', { replace: true })
         setUser(user)
 
-        const { data: adminRow } = await supabase.from('admins').select('is_super').eq('id', user.id).single()
-        setIsSuper(adminRow?.is_super || false)
+        const { data: row } = await supabase.from('admins').select('*').eq('id', user.id).single()
+        setAdminRow(row)
 
         const { data: profilesData } = await supabase.from('profiles').select('*')
             .order('priority', { ascending: true }).order('created_at', { ascending: false })
@@ -78,7 +84,7 @@ export default function AdminDashboard() {
         const { data: inboxData } = await supabase.from('inbox').select('*').order('created_at', { ascending: false })
         setInboxItems(inboxData || [])
 
-        if (adminRow?.is_super) {
+        if (isGod(row)) {
             const { data: adminsData } = await supabase.from('admins').select('*')
             setAdmins(adminsData || [])
         }
@@ -91,8 +97,10 @@ export default function AdminDashboard() {
     // ── PROFILE CRUD ──
     async function handleAddProfile(e) {
         e.preventDefault()
+        if (!can('edit')) { flash('No permission'); return }
         let photo_url = null
         if (photoFile) {
+            if (!can('image')) { flash('No image permission'); return }
             try {
                 photo_url = await uploadToCloudinary(photoFile);
             } catch (err) {
@@ -102,12 +110,8 @@ export default function AdminDashboard() {
         }
         if (editingProfileId) {
             const updates = {
-                name: profileForm.name,
-                crime: profileForm.crime,
-                reward: profileForm.reward,
-                priority: profileForm.priority,
-                height: profileForm.height,
-                remarks: profileForm.remarks
+                name: profileForm.name, crime: profileForm.crime, reward: profileForm.reward,
+                priority: profileForm.priority, height: profileForm.height, remarks: profileForm.remarks
             }
             if (photo_url) updates.photo_url = photo_url
             const { error } = await supabase.from('profiles').update(updates).eq('id', editingProfileId)
@@ -127,9 +131,7 @@ export default function AdminDashboard() {
     }
 
     async function handleDeleteProfile(id, photoUrl) {
-        // Cloudinary unauthenticated client-side deletion is not permitted by default.
-        // We will just remove it from the database for now.
-        // If needed, delete logic could be moved to a secure backend endpoint.
+        if (!can('edit')) { flash('No permission'); return }
         await supabase.from('profiles').delete().eq('id', id)
         flash('Profile deleted')
         await sendWebhookNotification(user.email, 'Delete Profile', `Deleted profile ID: ${id}`)
@@ -137,19 +139,17 @@ export default function AdminDashboard() {
     }
 
     function startEditProfile(p) {
+        if (!can('edit')) { flash('No permission'); return }
         setEditingProfileId(p.id)
         setProfileForm({
-            name: p.name,
-            crime: p.crime,
-            reward: p.reward,
-            priority: p.priority || 3,
-            height: p.height || '',
-            remarks: p.remarks || ''
+            name: p.name, crime: p.crime, reward: p.reward,
+            priority: p.priority || 3, height: p.height || '', remarks: p.remarks || ''
         })
         setActiveTab('profiles')
     }
 
     async function handleToggleCaptured(profile) {
+        if (!can('edit')) { flash('No permission'); return }
         const updates = { captured: !profile.captured }
         if (profile.captured) updates.capture_video_url = null
         await supabase.from('profiles').update(updates).eq('id', profile.id)
@@ -160,8 +160,8 @@ export default function AdminDashboard() {
     }
 
     async function handleUploadCaptureVideo(profileId) {
+        if (!can('video')) { flash('No video permission'); return }
         if (!captureVideoFile) { flash('Select a video'); return }
-
         let videoUrl = null;
         try {
             videoUrl = await uploadToCloudinary(captureVideoFile);
@@ -169,7 +169,6 @@ export default function AdminDashboard() {
             flash('Upload failed: ' + err.message);
             return;
         }
-
         await supabase.from('profiles').update({ capture_video_url: videoUrl }).eq('id', profileId)
         flash('Capture video uploaded')
         await sendWebhookNotification(user.email, 'Uploaded Captiva Video', `Video loaded for target ID ${profileId}`, videoUrl)
@@ -180,6 +179,7 @@ export default function AdminDashboard() {
 
     // ── PINS ──
     async function handleUpdatePin(pinId) {
+        if (!can('pin')) { flash('No permission'); return }
         await supabase.from('pins').update({ pin_value: pinEdits[pinId] }).eq('id', pinId)
         flash('PIN updated')
         await sendWebhookNotification(user.email, 'Updated System PIN Code', `PIN ${pinId} modified`)
@@ -188,6 +188,7 @@ export default function AdminDashboard() {
 
     // ── LOCKDOWN ──
     async function handleToggleLockdown() {
+        if (!can('lockdown')) { flash('No permission'); return }
         const newVal = !lockdown
         await supabase.from('settings').update({ value: String(newVal) }).eq('key', 'lockdown')
         setLockdown(newVal)
@@ -198,6 +199,7 @@ export default function AdminDashboard() {
     // ── ANNOUNCEMENTS ──
     async function handleAddAnnouncement(e) {
         e.preventDefault()
+        if (!can('edit')) { flash('No permission'); return }
         if (editingAnnouncementId) {
             await supabase.from('announcements').update(announcementForm).eq('id', editingAnnouncementId)
             flash('Announcement updated')
@@ -213,6 +215,7 @@ export default function AdminDashboard() {
     }
 
     async function handleDeleteAnnouncement(id) {
+        if (!can('edit')) { flash('No permission'); return }
         await supabase.from('announcements').delete().eq('id', id)
         flash('Announcement deleted')
         await sendWebhookNotification(user.email, 'Delete Announcement', `Erased announcement ID: ${id}`)
@@ -222,6 +225,8 @@ export default function AdminDashboard() {
     // ── SALAS UPLOAD ──
     async function handleAddSalasMedia(e) {
         e.preventDefault()
+        const requiredPerm = salasForm.media_type === 'video' ? 'video' : 'image'
+        if (!can(requiredPerm)) { flash(`No ${requiredPerm} permission`); return }
         if (!salasFile) { flash('Select a file'); return }
         let mediaUrl = null;
         try {
@@ -230,7 +235,6 @@ export default function AdminDashboard() {
             flash('Upload failed: ' + err.message);
             return;
         }
-
         await supabase.from('salas_media').insert([{ ...salasForm, media_url: mediaUrl }])
         flash('Uploaded to Salas')
         await sendWebhookNotification(user.email, 'Loaded to Salas', `Title: ${salasForm.title}`, mediaUrl)
@@ -240,19 +244,21 @@ export default function AdminDashboard() {
     }
 
     async function handleDeleteSalasItem(item) {
-        // Unauthenticated client-side deletion works differently for Cloudinary. We just remove the db record.
+        const requiredPerm = item.media_type === 'video' ? 'video' : 'image'
+        if (!can(requiredPerm)) { flash(`No ${requiredPerm} permission`); return }
         await supabase.from('salas_media').delete().eq('id', item.id)
         flash('Salas item deleted')
         await sendWebhookNotification(user.email, 'Remove Salas Media', `Title: ${item.title} removed`)
         await loadData()
     }
 
-    // ── ADMIN MANAGEMENT ──
+    // ── ADMIN MANAGEMENT (god only) ──
     async function handleCreateAdmin(e) {
         e.preventDefault()
+        if (!godMode) { flash('No permission'); return }
         const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email: adminForm.email, password: adminForm.password })
         if (signUpError) { flash('Failed: ' + signUpError.message); return }
-        const { error: insertError } = await supabase.from('admins').insert([{ id: signUpData.user.id, is_super: false }])
+        const { error: insertError } = await supabase.from('admins').insert([{ id: signUpData.user.id, permissions: {} }])
         if (insertError) { flash('Admin insert failed'); return }
         flash('Admin created')
         await sendWebhookNotification(user.email, 'New Regional Admin Added', `Email: ${adminForm.email}`)
@@ -261,10 +267,25 @@ export default function AdminDashboard() {
     }
 
     async function handleDeleteAdmin(adminId) {
+        if (!godMode) { flash('No permission'); return }
         if (adminId === user.id) { flash('Cannot delete yourself'); return }
         await supabase.from('admins').delete().eq('id', adminId)
         flash('Admin removed')
         await sendWebhookNotification(user.email, 'Regional Admin Deleted', `Admin ID Purged: ${adminId}`)
+        await loadData()
+    }
+
+    async function handleTogglePermission(adminId, perm) {
+        if (!godMode) { flash('No permission'); return }
+        const target = admins.find(a => a.id === adminId)
+        if (!target || isGod(target)) return // can't modify god via UI
+        const current = target.permissions || {}
+        const updated = { ...current, [perm]: !current[perm] }
+        // Clean false values
+        Object.keys(updated).forEach(k => { if (!updated[k]) delete updated[k] })
+        await supabase.from('admins').update({ permissions: updated }).eq('id', adminId)
+        flash(`${PERMISSION_LABELS[perm]} ${updated[perm] ? 'granted' : 'revoked'}`)
+        await sendWebhookNotification(user.email, 'Permission Changed', `Admin ${adminId.slice(0, 8)}... → ${perm}: ${!!updated[perm]}`)
         await loadData()
     }
 
@@ -277,7 +298,6 @@ export default function AdminDashboard() {
     }
 
     async function handleDeleteInbox(item) {
-        // Delete from Cloudinary if image exists
         if (item.cloudinary_public_id) {
             flash('Deleting from cloud...')
             await deleteFromCloudinary(item.cloudinary_public_id, item.cloudinary_resource_type || 'image')
@@ -302,15 +322,22 @@ export default function AdminDashboard() {
         )
     }
 
+    // Build tabs based on permissions
     const tabs = [
         { key: 'profiles', label: 'Profiles' },
         { key: 'inbox', label: `Inbox (${inboxItems.length})` },
-        { key: 'announcements', label: 'News' },
-        { key: 'salas', label: 'Salas' },
-        { key: 'pins', label: 'PINs' },
-        { key: 'lockdown', label: 'Lockdown' },
-        ...(isSuper ? [{ key: 'admins', label: 'Admins' }] : []),
+        ...(can('edit') ? [{ key: 'announcements', label: 'News' }] : []),
+        ...(can('image') || can('video') ? [{ key: 'salas', label: 'Salas' }] : []),
+        ...(can('pin') ? [{ key: 'pins', label: 'PINs' }] : []),
+        ...(can('lockdown') ? [{ key: 'lockdown', label: 'Lockdown' }] : []),
+        ...(godMode ? [{ key: 'admins', label: 'Admins' }] : []),
     ]
+
+    // Permission badges for header
+    const myPerms = adminRow?.permissions || {}
+    const permBadges = godMode
+        ? [{ key: 'god', color: 'var(--color-gold)' }]
+        : PERMISSIONS.filter(p => myPerms[p]).map(p => ({ key: p, color: 'var(--color-text-muted)' }))
 
     return (
         <div className="min-h-screen bg-[var(--color-primary)]">
@@ -318,7 +345,15 @@ export default function AdminDashboard() {
             <header className="bg-[var(--color-surface)] border-b border-[var(--color-border)] px-4 py-3 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                     <h1 className="text-base font-[var(--font-heading)] text-white tracking-wider">ADMIN</h1>
-                    {isSuper && <span className="text-[var(--color-gold)] font-[var(--font-mono)] text-[10px] border border-[var(--color-gold)] px-1.5 py-0.5 rounded">SUPER</span>}
+                    {/* Permission badges */}
+                    <div className="flex gap-1 flex-wrap">
+                        {permBadges.map(b => (
+                            <span key={b.key} className="font-[var(--font-mono)] text-[9px] border px-1.5 py-0.5 rounded uppercase tracking-wider"
+                                style={{ color: b.color, borderColor: b.color }}>
+                                {PERMISSION_LABELS[b.key]}
+                            </span>
+                        ))}
+                    </div>
                 </div>
                 <div className="flex items-center gap-4">
                     <span className="text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs hidden md:block">{user?.email}</span>
@@ -346,52 +381,56 @@ export default function AdminDashboard() {
                 {/* ═══════ PROFILES ═══════ */}
                 {activeTab === 'profiles' && (
                     <div className="space-y-6">
-                        <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-5">
-                            <h2 className="text-sm font-[var(--font-heading)] text-white tracking-wider mb-4">{editingProfileId ? 'Edit Profile' : 'Add Profile'}</h2>
-                            <form onSubmit={handleAddProfile} className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <div>
-                                    <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Name</label>
-                                    <input type="text" value={profileForm.name} onChange={e => setProfileForm(f => ({ ...f, name: e.target.value }))} className="admin-input" required />
-                                </div>
-                                <div>
-                                    <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Reward</label>
-                                    <input type="text" value={profileForm.reward} onChange={e => setProfileForm(f => ({ ...f, reward: e.target.value }))} className="admin-input" placeholder="e.g. $50,000" required />
-                                </div>
-                                <div>
-                                    <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Crime</label>
-                                    <input type="text" value={profileForm.crime} onChange={e => setProfileForm(f => ({ ...f, crime: e.target.value }))} className="admin-input" required />
-                                </div>
-                                <div>
-                                    <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Priority</label>
-                                    <select value={profileForm.priority} onChange={e => setProfileForm(f => ({ ...f, priority: parseInt(e.target.value) }))} className="admin-input">
-                                        <option value={1}>1 — Top Priority</option>
-                                        <option value={2}>2 — High</option>
-                                        <option value={3}>3 — Wanted</option>
-                                        <option value={4}>4 — Moderate</option>
-                                        <option value={5}>5 — Low</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Height/Details</label>
-                                    <input type="text" value={profileForm.height} onChange={e => setProfileForm(f => ({ ...f, height: e.target.value }))} className="admin-input" placeholder="e.g. 5'11, Unknown" />
-                                </div>
-                                <div>
-                                    <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Remarks</label>
-                                    <input type="text" value={profileForm.remarks} onChange={e => setProfileForm(f => ({ ...f, remarks: e.target.value }))} className="admin-input" placeholder="e.g. Armed and dangerous" />
-                                </div>
-                                <div className="md:col-span-2">
-                                    <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Photo</label>
-                                    <input type="file" accept="image/*" onChange={e => setPhotoFile(e.target.files[0])}
-                                        className="text-[var(--color-text-muted)] font-[var(--font-mono)] text-sm file:mr-3 file:py-1.5 file:px-3 file:border-0 file:bg-[var(--color-accent)] file:text-white file:font-[var(--font-body)] file:cursor-pointer file:rounded file:text-xs" />
-                                </div>
-                                <div className="md:col-span-2 flex gap-3">
-                                    <button type="submit" className="btn-primary text-xs">{editingProfileId ? 'Save' : 'Add Profile'}</button>
-                                    {editingProfileId && (
-                                        <button type="button" onClick={() => { setEditingProfileId(null); setProfileForm({ name: '', crime: '', reward: '', priority: 3, height: '', remarks: '' }) }} className="btn-outline text-xs cursor-pointer">Cancel</button>
+                        {can('edit') && (
+                            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-5">
+                                <h2 className="text-sm font-[var(--font-heading)] text-white tracking-wider mb-4">{editingProfileId ? 'Edit Profile' : 'Add Profile'}</h2>
+                                <form onSubmit={handleAddProfile} className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Name</label>
+                                        <input type="text" value={profileForm.name} onChange={e => setProfileForm(f => ({ ...f, name: e.target.value }))} className="admin-input" required />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Reward</label>
+                                        <input type="text" value={profileForm.reward} onChange={e => setProfileForm(f => ({ ...f, reward: e.target.value }))} className="admin-input" placeholder="e.g. $50,000" required />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Crime</label>
+                                        <input type="text" value={profileForm.crime} onChange={e => setProfileForm(f => ({ ...f, crime: e.target.value }))} className="admin-input" required />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Priority</label>
+                                        <select value={profileForm.priority} onChange={e => setProfileForm(f => ({ ...f, priority: parseInt(e.target.value) }))} className="admin-input">
+                                            <option value={1}>1 — Top Priority</option>
+                                            <option value={2}>2 — High</option>
+                                            <option value={3}>3 — Wanted</option>
+                                            <option value={4}>4 — Moderate</option>
+                                            <option value={5}>5 — Low</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Height/Details</label>
+                                        <input type="text" value={profileForm.height} onChange={e => setProfileForm(f => ({ ...f, height: e.target.value }))} className="admin-input" placeholder="e.g. 5'11, Unknown" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Remarks</label>
+                                        <input type="text" value={profileForm.remarks} onChange={e => setProfileForm(f => ({ ...f, remarks: e.target.value }))} className="admin-input" placeholder="e.g. Armed and dangerous" />
+                                    </div>
+                                    {can('image') && (
+                                        <div className="md:col-span-2">
+                                            <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Photo</label>
+                                            <input type="file" accept="image/*" onChange={e => setPhotoFile(e.target.files[0])}
+                                                className="text-[var(--color-text-muted)] font-[var(--font-mono)] text-sm file:mr-3 file:py-1.5 file:px-3 file:border-0 file:bg-[var(--color-accent)] file:text-white file:font-[var(--font-body)] file:cursor-pointer file:rounded file:text-xs" />
+                                        </div>
                                     )}
-                                </div>
-                            </form>
-                        </div>
+                                    <div className="md:col-span-2 flex gap-3">
+                                        <button type="submit" className="btn-primary text-xs">{editingProfileId ? 'Save' : 'Add Profile'}</button>
+                                        {editingProfileId && (
+                                            <button type="button" onClick={() => { setEditingProfileId(null); setProfileForm({ name: '', crime: '', reward: '', priority: 3, height: '', remarks: '' }) }} className="btn-outline text-xs cursor-pointer">Cancel</button>
+                                        )}
+                                    </div>
+                                </form>
+                            </div>
+                        )}
 
                         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded overflow-hidden">
                             <div className="p-4 border-b border-[var(--color-border)]">
@@ -417,20 +456,20 @@ export default function AdminDashboard() {
                                                 </div>
                                                 <span className="text-[var(--color-gold)] font-[var(--font-mono)] text-xs shrink-0">{profile.reward}</span>
                                                 <div className="flex gap-1.5 shrink-0 flex-wrap">
-                                                    <button onClick={() => startEditProfile(profile)} className="text-[var(--color-text-muted)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-border)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Edit</button>
-                                                    <button onClick={() => handleToggleCaptured(profile)}
+                                                    {can('edit') && <button onClick={() => startEditProfile(profile)} className="text-[var(--color-text-muted)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-border)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Edit</button>}
+                                                    {can('edit') && <button onClick={() => handleToggleCaptured(profile)}
                                                         className={`font-[var(--font-mono)] text-[10px] border px-2 py-1 rounded cursor-pointer bg-transparent transition-colors ${profile.captured ? 'text-[var(--color-captured)] border-[var(--color-captured)]' : 'text-[var(--color-text-muted)] border-[var(--color-border)]'}`}>
                                                         {profile.captured ? 'Uncapture' : 'Capture'}
-                                                    </button>
-                                                    {profile.captured && (
+                                                    </button>}
+                                                    {can('video') && profile.captured && (
                                                         <button onClick={() => setCapturingProfileId(capturingProfileId === profile.id ? null : profile.id)}
                                                             className="text-[var(--color-text-muted)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-border)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Video</button>
                                                     )}
-                                                    <button onClick={() => handleDeleteProfile(profile.id, profile.photo_url)} className="text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-accent)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Delete</button>
+                                                    {can('edit') && <button onClick={() => handleDeleteProfile(profile.id, profile.photo_url)} className="text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-accent)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Delete</button>}
                                                     <button onClick={() => setSelectedProfileForCase(profile)} className="text-[var(--color-gold)] hover:bg-[var(--color-gold)] hover:text-black font-[var(--font-mono)] text-[10px] border border-[var(--color-gold)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Case File</button>
                                                 </div>
                                             </div>
-                                            {capturingProfileId === profile.id && (
+                                            {capturingProfileId === profile.id && can('video') && (
                                                 <div className="mt-3 ml-16 p-3 bg-[var(--color-surface-light)] rounded border border-[var(--color-border)] flex items-center gap-3 flex-wrap">
                                                     <input type="file" accept="video/*" onChange={e => setCaptureVideoFile(e.target.files[0])}
                                                         className="text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs file:mr-2 file:py-1 file:px-2 file:border-0 file:bg-[var(--color-captured)] file:text-white file:cursor-pointer file:rounded file:text-[10px]" />
@@ -497,7 +536,7 @@ export default function AdminDashboard() {
                 )}
 
                 {/* ═══════ ANNOUNCEMENTS ═══════ */}
-                {activeTab === 'announcements' && (
+                {activeTab === 'announcements' && can('edit') && (
                     <div className="space-y-6">
                         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-5">
                             <h2 className="text-sm font-[var(--font-heading)] text-white tracking-wider mb-4">{editingAnnouncementId ? 'Edit Announcement' : 'Post Announcement'}</h2>
@@ -549,7 +588,7 @@ export default function AdminDashboard() {
                 )}
 
                 {/* ═══════ SALAS ═══════ */}
-                {activeTab === 'salas' && (
+                {activeTab === 'salas' && (can('image') || can('video')) && (
                     <div className="space-y-6">
                         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-5">
                             <h2 className="text-sm font-[var(--font-heading)] text-white tracking-wider mb-4">Upload to Salas</h2>
@@ -565,8 +604,8 @@ export default function AdminDashboard() {
                                 <div>
                                     <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Type</label>
                                     <select value={salasForm.media_type} onChange={e => setSalasForm(f => ({ ...f, media_type: e.target.value }))} className="admin-input">
-                                        <option value="photo">Photo</option>
-                                        <option value="video">Video</option>
+                                        {can('image') && <option value="photo">Photo</option>}
+                                        {can('video') && <option value="video">Video</option>}
                                     </select>
                                 </div>
                                 <div>
@@ -601,8 +640,10 @@ export default function AdminDashboard() {
                                                 <p className="text-white text-sm truncate">{item.title}</p>
                                                 <p className="text-[var(--color-text-muted)] font-[var(--font-mono)] text-[10px]">{item.media_type} · {item.posted_date}</p>
                                             </div>
-                                            <button onClick={() => handleDeleteSalasItem(item)}
-                                                className="text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-accent)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Delete</button>
+                                            {can(item.media_type === 'video' ? 'video' : 'image') && (
+                                                <button onClick={() => handleDeleteSalasItem(item)}
+                                                    className="text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-accent)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Delete</button>
+                                            )}
                                         </div>
                                     ))}
                                 </div>
@@ -612,7 +653,7 @@ export default function AdminDashboard() {
                 )}
 
                 {/* ═══════ PINS ═══════ */}
-                {activeTab === 'pins' && (
+                {activeTab === 'pins' && can('pin') && (
                     <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-5 space-y-4">
                         <h2 className="text-sm font-[var(--font-heading)] text-white tracking-wider">PIN Codes</h2>
                         {pins.map(pin => (
@@ -626,7 +667,7 @@ export default function AdminDashboard() {
                 )}
 
                 {/* ═══════ LOCKDOWN ═══════ */}
-                {activeTab === 'lockdown' && (
+                {activeTab === 'lockdown' && can('lockdown') && (
                     <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-6 text-center space-y-5">
                         <h2 className="text-sm font-[var(--font-heading)] text-white tracking-wider">Lockdown Mode</h2>
                         <div className={`inline-block px-5 py-2 border rounded font-[var(--font-mono)] text-sm tracking-wider ${lockdown ? 'border-[var(--color-accent)] text-[var(--color-accent)]' : 'border-[var(--color-captured)] text-[var(--color-captured)]'}`}>
@@ -642,8 +683,8 @@ export default function AdminDashboard() {
                     </div>
                 )}
 
-                {/* ═══════ ADMINS (super only) ═══════ */}
-                {activeTab === 'admins' && isSuper && (
+                {/* ═══════ ADMINS (god only) ═══════ */}
+                {activeTab === 'admins' && godMode && (
                     <div className="space-y-6">
                         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded p-5">
                             <h2 className="text-sm font-[var(--font-heading)] text-white tracking-wider mb-4">Create Admin</h2>
@@ -661,24 +702,51 @@ export default function AdminDashboard() {
                                 </div>
                             </form>
                         </div>
+
                         <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded overflow-hidden">
                             <div className="p-4 border-b border-[var(--color-border)]">
                                 <h2 className="text-sm font-[var(--font-heading)] text-white tracking-wider">Admins ({admins.length})</h2>
                             </div>
                             <div className="divide-y divide-[var(--color-border)]">
-                                {admins.map(admin => (
-                                    <div key={admin.id} className="flex items-center justify-between p-4">
-                                        <div className="flex items-center gap-3">
-                                            <span className="text-white font-[var(--font-mono)] text-xs">{admin.id.slice(0, 8)}...</span>
-                                            {admin.is_super && <span className="text-[var(--color-gold)] font-[var(--font-mono)] text-[10px] border border-[var(--color-gold)] px-1.5 py-0.5 rounded">SUPER</span>}
-                                            {admin.id === user.id && <span className="text-[var(--color-captured)] font-[var(--font-mono)] text-[10px]">(you)</span>}
+                                {admins.map(admin => {
+                                    const adminIsGod = isGod(admin)
+                                    const perms = admin.permissions || {}
+                                    return (
+                                        <div key={admin.id} className="p-4">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-3">
+                                                    <span className="text-white font-[var(--font-mono)] text-xs">{admin.id.slice(0, 8)}...</span>
+                                                    {adminIsGod && <span className="text-[var(--color-gold)] font-[var(--font-mono)] text-[10px] border border-[var(--color-gold)] px-1.5 py-0.5 rounded">GOD</span>}
+                                                    {admin.id === user.id && <span className="text-[var(--color-captured)] font-[var(--font-mono)] text-[10px]">(you)</span>}
+                                                </div>
+                                                {!adminIsGod && (
+                                                    <button onClick={() => handleDeleteAdmin(admin.id)}
+                                                        className="text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-accent)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Remove</button>
+                                                )}
+                                            </div>
+                                            {/* Permission toggles (non-god admins only) */}
+                                            {!adminIsGod && (
+                                                <div className="mt-3 ml-4 flex flex-wrap gap-2">
+                                                    {PERMISSIONS.map(perm => {
+                                                        const active = perms[perm] === true
+                                                        return (
+                                                            <button key={perm} onClick={() => handleTogglePermission(admin.id, perm)}
+                                                                className={`font-[var(--font-mono)] text-[10px] border px-2.5 py-1 rounded cursor-pointer transition-all ${active
+                                                                        ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]'
+                                                                        : 'bg-transparent text-[var(--color-text-muted)] border-[var(--color-border)] hover:border-white/30'
+                                                                    }`}>
+                                                                {active ? '✓ ' : ''}{PERMISSION_LABELS[perm]}
+                                                            </button>
+                                                        )
+                                                    })}
+                                                    <span className="text-[var(--color-text-muted)] font-[var(--font-mono)] text-[9px] self-center ml-1">
+                                                        ({Object.keys(perms).filter(k => perms[k]).length} active)
+                                                    </span>
+                                                </div>
+                                            )}
                                         </div>
-                                        {!admin.is_super && (
-                                            <button onClick={() => handleDeleteAdmin(admin.id)}
-                                                className="text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-accent)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Remove</button>
-                                        )}
-                                    </div>
-                                ))}
+                                    )
+                                })}
                             </div>
                         </div>
                     </div>

@@ -9,3 +9,14 @@ ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS capture_video_url TEXT;
 
 -- Add priority level (1 = highest, 5 = lowest)
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 3;
+
+-- ================================================================
+-- Permissions system (replaces is_super)
+-- ================================================================
+-- Add permissions JSONB column to admins
+-- god role: {"god": true}  (set only in Supabase table editor)
+-- other admins: {"image": true, "video": true, "edit": true, "pin": true, "lockdown": true}
+ALTER TABLE public.admins ADD COLUMN IF NOT EXISTS permissions JSONB DEFAULT '{}'::jsonb;
+
+-- Migrate existing is_super admins to god role
+UPDATE public.admins SET permissions = '{"god": true}'::jsonb WHERE is_super = true AND (permissions = '{}'::jsonb OR permissions IS NULL);
