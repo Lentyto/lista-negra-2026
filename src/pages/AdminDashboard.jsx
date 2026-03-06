@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { sendWebhookNotification } from '../lib/discord'
+import { uploadToCloudinary } from '../lib/cloudinary'
+import CaseFileModal from '../components/CaseFileModal'
 
 export default function AdminDashboard() {
     const navigate = useNavigate()
@@ -18,9 +20,10 @@ export default function AdminDashboard() {
     const [statusMessage, setStatusMessage] = useState('')
 
     // Profile form
-    const [profileForm, setProfileForm] = useState({ name: '', crime: '', reward: '', priority: 3 })
+    const [profileForm, setProfileForm] = useState({ name: '', crime: '', reward: '', priority: 3, height: '', remarks: '' })
     const [photoFile, setPhotoFile] = useState(null)
     const [editingProfileId, setEditingProfileId] = useState(null)
+    const [selectedProfileForCase, setSelectedProfileForCase] = useState(null)
 
     // Admin form
     const [adminForm, setAdminForm] = useState({ email: '', password: '' })
@@ -44,33 +47,6 @@ export default function AdminDashboard() {
         setStatusMessage(msg)
         setTimeout(() => setStatusMessage(''), 3000)
     }
-
-    async function uploadToCloudinary(file) {
-        const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME;
-        const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET;
-
-        if (!cloudName || !uploadPreset) {
-            throw new Error("Cloudinary not configured. Check .env variables.");
-        }
-
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('upload_preset', uploadPreset);
-
-        // 'auto' resource_type handles both images and videos
-        const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`, {
-            method: 'POST',
-            body: formData
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-            throw new Error(data.error?.message || 'Cloudinary upload failed');
-        }
-
-        return data.secure_url;
-    }
-
     const loadData = useCallback(async () => {
         const { data: { user } } = await supabase.auth.getUser()
         if (!user) return navigate('/admin/login', { replace: true })
@@ -121,7 +97,14 @@ export default function AdminDashboard() {
             }
         }
         if (editingProfileId) {
-            const updates = { name: profileForm.name, crime: profileForm.crime, reward: profileForm.reward, priority: profileForm.priority }
+            const updates = {
+                name: profileForm.name,
+                crime: profileForm.crime,
+                reward: profileForm.reward,
+                priority: profileForm.priority,
+                height: profileForm.height,
+                remarks: profileForm.remarks
+            }
             if (photo_url) updates.photo_url = photo_url
             const { error } = await supabase.from('profiles').update(updates).eq('id', editingProfileId)
             if (error) { flash('Update failed'); return }
@@ -134,7 +117,7 @@ export default function AdminDashboard() {
             flash('Profile added')
             await sendWebhookNotification(user.email, 'Add Profile', `Added new profile: ${profileForm.name}`, photo_url || null)
         }
-        setProfileForm({ name: '', crime: '', reward: '', priority: 3 })
+        setProfileForm({ name: '', crime: '', reward: '', priority: 3, height: '', remarks: '' })
         setPhotoFile(null)
         await loadData()
     }
@@ -151,7 +134,14 @@ export default function AdminDashboard() {
 
     function startEditProfile(p) {
         setEditingProfileId(p.id)
-        setProfileForm({ name: p.name, crime: p.crime, reward: p.reward, priority: p.priority || 3 })
+        setProfileForm({
+            name: p.name,
+            crime: p.crime,
+            reward: p.reward,
+            priority: p.priority || 3,
+            height: p.height || '',
+            remarks: p.remarks || ''
+        })
         setActiveTab('profiles')
     }
 
@@ -356,6 +346,14 @@ export default function AdminDashboard() {
                                         <option value={5}>5 — Low</option>
                                     </select>
                                 </div>
+                                <div>
+                                    <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Height/Details</label>
+                                    <input type="text" value={profileForm.height} onChange={e => setProfileForm(f => ({ ...f, height: e.target.value }))} className="admin-input" placeholder="e.g. 5'11, Unknown" />
+                                </div>
+                                <div>
+                                    <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Remarks</label>
+                                    <input type="text" value={profileForm.remarks} onChange={e => setProfileForm(f => ({ ...f, remarks: e.target.value }))} className="admin-input" placeholder="e.g. Armed and dangerous" />
+                                </div>
                                 <div className="md:col-span-2">
                                     <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-xs mb-1">Photo</label>
                                     <input type="file" accept="image/*" onChange={e => setPhotoFile(e.target.files[0])}
@@ -364,7 +362,7 @@ export default function AdminDashboard() {
                                 <div className="md:col-span-2 flex gap-3">
                                     <button type="submit" className="btn-primary text-xs">{editingProfileId ? 'Save' : 'Add Profile'}</button>
                                     {editingProfileId && (
-                                        <button type="button" onClick={() => { setEditingProfileId(null); setProfileForm({ name: '', crime: '', reward: '', priority: 3 }) }} className="btn-outline text-xs cursor-pointer">Cancel</button>
+                                        <button type="button" onClick={() => { setEditingProfileId(null); setProfileForm({ name: '', crime: '', reward: '', priority: 3, height: '', remarks: '' }) }} className="btn-outline text-xs cursor-pointer">Cancel</button>
                                     )}
                                 </div>
                             </form>
@@ -404,6 +402,7 @@ export default function AdminDashboard() {
                                                             className="text-[var(--color-text-muted)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-border)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Video</button>
                                                     )}
                                                     <button onClick={() => handleDeleteProfile(profile.id, profile.photo_url)} className="text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-white font-[var(--font-mono)] text-[10px] border border-[var(--color-accent)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Delete</button>
+                                                    <button onClick={() => setSelectedProfileForCase(profile)} className="text-[var(--color-gold)] hover:bg-[var(--color-gold)] hover:text-black font-[var(--font-mono)] text-[10px] border border-[var(--color-gold)] px-2 py-1 rounded cursor-pointer bg-transparent transition-colors">Case File</button>
                                                 </div>
                                             </div>
                                             {capturingProfileId === profile.id && (
@@ -610,6 +609,20 @@ export default function AdminDashboard() {
                     </div>
                 )}
             </main>
+
+            {selectedProfileForCase && (
+                <CaseFileModal
+                    profile={selectedProfileForCase}
+                    onClose={() => setSelectedProfileForCase(null)}
+                    isAdminInitially={true}
+                    onUpdate={async () => {
+                        await loadData();
+                        const updated = profiles.find(p => p.id === selectedProfileForCase.id);
+                        if (updated) setSelectedProfileForCase(updated);
+                        else setSelectedProfileForCase(null);
+                    }}
+                />
+            )}
         </div>
     )
 }

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import Sidebar from '../components/Sidebar'
 import WantedCard from '../components/WantedCard'
+import CaseFileModal from '../components/CaseFileModal'
 
 export default function Gallery() {
     const [profiles, setProfiles] = useState([])
@@ -10,7 +11,16 @@ export default function Gallery() {
     const [loading, setLoading] = useState(true)
     const [authorized, setAuthorized] = useState(false)
     const [selected, setSelected] = useState(null)
+    const [showCaseFile, setShowCaseFile] = useState(false)
     const navigate = useNavigate()
+
+    async function fetchProfilesData() {
+        const { data: profilesData } = await supabase
+            .from('profiles').select('*')
+            .order('priority', { ascending: true })
+            .order('created_at', { ascending: false })
+        setProfiles(profilesData || [])
+    }
 
     useEffect(() => {
         async function init() {
@@ -33,11 +43,7 @@ export default function Gallery() {
 
             setAuthorized(true)
 
-            const { data: profilesData } = await supabase
-                .from('profiles').select('*')
-                .order('priority', { ascending: true })
-                .order('created_at', { ascending: false })
-            setProfiles(profilesData || [])
+            await fetchProfilesData()
 
             const { data: announcementsData } = await supabase
                 .from('announcements').select('*')
@@ -134,6 +140,13 @@ export default function Gallery() {
                                         <video src={selected.capture_video_url} controls className="w-full max-w-md rounded border border-[var(--color-border)]" />
                                     </div>
                                 )}
+
+                                <button
+                                    onClick={() => setShowCaseFile(true)}
+                                    className="btn-primary mt-2 py-3 w-full text-xs tracking-widest bg-[var(--color-surface-light)] border border-[var(--color-border)] hover:border-white transition-all shadow-[0_0_15px_rgba(255,255,255,0.05)] hover:shadow-[0_0_20px_rgba(255,255,255,0.15)]"
+                                >
+                                    OPEN CASE FILE / WARRANT
+                                </button>
                             </div>
                         </div>
                     )}
@@ -152,6 +165,19 @@ export default function Gallery() {
                     )}
                 </main>
             </div>
+
+            {showCaseFile && selected && (
+                <CaseFileModal
+                    profile={selected}
+                    onClose={() => setShowCaseFile(false)}
+                    isAdminInitially={false}
+                    onUpdate={async () => {
+                        await fetchProfilesData();
+                        const updated = profiles.find(p => p.id === selected.id);
+                        if (updated) setSelected(updated);
+                    }}
+                />
+            )}
         </>
     )
 }
