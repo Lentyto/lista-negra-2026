@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { sendWebhookNotification } from '../lib/discord'
 
 export default function AdminDashboard() {
     const navigate = useNavigate()
@@ -99,11 +100,13 @@ export default function AdminDashboard() {
             const { error } = await supabase.from('profiles').update(updates).eq('id', editingProfileId)
             if (error) { flash('Update failed'); return }
             flash('Profile updated')
+            await sendWebhookNotification(user.email, 'Edit Profile', `Edited profile: ${profileForm.name}`, photo_url || null)
             setEditingProfileId(null)
         } else {
             const { error } = await supabase.from('profiles').insert([{ ...profileForm, photo_url }])
             if (error) { flash('Insert failed'); return }
             flash('Profile added')
+            await sendWebhookNotification(user.email, 'Add Profile', `Added new profile: ${profileForm.name}`, photo_url || null)
         }
         setProfileForm({ name: '', crime: '', reward: '', priority: 3 })
         setPhotoFile(null)
@@ -114,6 +117,7 @@ export default function AdminDashboard() {
         if (photoUrl) { const path = photoUrl.split('/photos/')[1]; if (path) await supabase.storage.from('photos').remove([path]) }
         await supabase.from('profiles').delete().eq('id', id)
         flash('Profile deleted')
+        await sendWebhookNotification(user.email, 'Delete Profile', `Deleted profile ID: ${id}`)
         await loadData()
     }
 
@@ -128,6 +132,7 @@ export default function AdminDashboard() {
         if (profile.captured) updates.capture_video_url = null
         await supabase.from('profiles').update(updates).eq('id', profile.id)
         flash(!profile.captured ? 'Marked captured' : 'Marked at large')
+        await sendWebhookNotification(user.email, 'Toggle Profile Captiva', `Target ID: ${profile.id} state -> ${!profile.captured ? 'Captured' : 'At large'}`)
         setCapturingProfileId(null)
         await loadData()
     }
@@ -141,6 +146,7 @@ export default function AdminDashboard() {
         const { data: urlData } = supabase.storage.from('photos').getPublicUrl(fileName)
         await supabase.from('profiles').update({ capture_video_url: urlData.publicUrl }).eq('id', profileId)
         flash('Capture video uploaded')
+        await sendWebhookNotification(user.email, 'Uploaded Captiva Video', `Video loaded for target ID ${profileId}`, urlData.publicUrl)
         setCaptureVideoFile(null)
         setCapturingProfileId(null)
         await loadData()
@@ -150,6 +156,7 @@ export default function AdminDashboard() {
     async function handleUpdatePin(pinId) {
         await supabase.from('pins').update({ pin_value: pinEdits[pinId] }).eq('id', pinId)
         flash('PIN updated')
+        await sendWebhookNotification(user.email, 'Updated System PIN Code', `PIN ${pinId} modified`)
         await loadData()
     }
 
@@ -159,6 +166,7 @@ export default function AdminDashboard() {
         await supabase.from('settings').update({ value: String(newVal) }).eq('key', 'lockdown')
         setLockdown(newVal)
         flash(newVal ? 'Lockdown activated' : 'Lockdown deactivated')
+        await sendWebhookNotification(user.email, 'Lockdown System Action', `System lockdown: ${newVal ? 'ENGAGED' : 'DISENGAGED'}`)
     }
 
     // ── ANNOUNCEMENTS ──
@@ -167,10 +175,12 @@ export default function AdminDashboard() {
         if (editingAnnouncementId) {
             await supabase.from('announcements').update(announcementForm).eq('id', editingAnnouncementId)
             flash('Announcement updated')
+            await sendWebhookNotification(user.email, 'Update Announcement', `Updated: ${announcementForm.title}`)
             setEditingAnnouncementId(null)
         } else {
             await supabase.from('announcements').insert([announcementForm])
             flash('Announcement posted')
+            await sendWebhookNotification(user.email, 'New Announcement', `Posted: ${announcementForm.title}`)
         }
         setAnnouncementForm({ title: '', content: '' })
         await loadData()
@@ -179,6 +189,7 @@ export default function AdminDashboard() {
     async function handleDeleteAnnouncement(id) {
         await supabase.from('announcements').delete().eq('id', id)
         flash('Announcement deleted')
+        await sendWebhookNotification(user.email, 'Delete Announcement', `Erased announcement ID: ${id}`)
         await loadData()
     }
 
@@ -193,6 +204,7 @@ export default function AdminDashboard() {
         const { data: urlData } = supabase.storage.from('photos').getPublicUrl(fileName)
         await supabase.from('salas_media').insert([{ ...salasForm, media_url: urlData.publicUrl }])
         flash('Uploaded to Salas')
+        await sendWebhookNotification(user.email, 'Loaded to Salas', `Title: ${salasForm.title}`, urlData.publicUrl)
         setSalasForm({ title: '', posted_date: new Date().toISOString().split('T')[0], media_type: 'photo' })
         setSalasFile(null)
         await loadData()
@@ -203,6 +215,7 @@ export default function AdminDashboard() {
         if (path) await supabase.storage.from('photos').remove([path])
         await supabase.from('salas_media').delete().eq('id', item.id)
         flash('Salas item deleted')
+        await sendWebhookNotification(user.email, 'Remove Salas Media', `Title: ${item.title} removed`)
         await loadData()
     }
 
@@ -214,6 +227,7 @@ export default function AdminDashboard() {
         const { error: insertError } = await supabase.from('admins').insert([{ id: signUpData.user.id, is_super: false }])
         if (insertError) { flash('Admin insert failed'); return }
         flash('Admin created')
+        await sendWebhookNotification(user.email, 'New Regional Admin Added', `Email: ${adminForm.email}`)
         setAdminForm({ email: '', password: '' })
         await loadData()
     }
@@ -222,10 +236,12 @@ export default function AdminDashboard() {
         if (adminId === user.id) { flash('Cannot delete yourself'); return }
         await supabase.from('admins').delete().eq('id', adminId)
         flash('Admin removed')
+        await sendWebhookNotification(user.email, 'Regional Admin Deleted', `Admin ID Purged: ${adminId}`)
         await loadData()
     }
 
     async function handleLogout() {
+        await sendWebhookNotification(user.email, 'Admin Logout', 'Admin logged out of the dashboard.');
         await supabase.auth.signOut()
         navigate('/', { replace: true })
     }

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { sendWebhookNotification } from '../lib/discord'
 
 export default function AdminLogin() {
     const [email, setEmail] = useState('')
@@ -37,6 +38,9 @@ export default function AdminLogin() {
             setLoading(false)
             return
         }
+
+        // Send webhook notification
+        await sendWebhookNotification(data.user.email, 'Admin Login', 'Admin successfully logged into the dashboard.');
 
         navigate('/admin', { replace: true })
     }

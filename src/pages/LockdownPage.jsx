@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { sendWebhookNotification } from '../lib/discord'
 
 export default function LockdownPage() {
     const [email, setEmail] = useState('')
@@ -39,6 +40,7 @@ export default function LockdownPage() {
 
         // Grant gallery access for this session
         sessionStorage.setItem('ln_access', 'granted')
+        await sendWebhookNotification(data.user.email, 'Lockdown Login', 'Admin successfully logged in during lockdown mode.');
         setLoggedIn(true)
         setLoading(false)
     }
