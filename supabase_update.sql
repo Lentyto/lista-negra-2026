@@ -20,3 +20,6 @@ ALTER TABLE public.admins ADD COLUMN IF NOT EXISTS permissions JSONB DEFAULT '{}
 
 -- Migrate existing is_super admins to god role
 UPDATE public.admins SET permissions = '{"god": true}'::jsonb WHERE is_super = true AND (permissions = '{}'::jsonb OR permissions IS NULL);
+
+-- Add email column to admins for display purposes
+ALTER TABLE public.admins ADD COLUMN IF NOT EXISTS email TEXT;

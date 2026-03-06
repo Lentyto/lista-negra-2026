@@ -258,7 +258,7 @@ export default function AdminDashboard() {
         if (!godMode) { flash('No permission'); return }
         const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email: adminForm.email, password: adminForm.password })
         if (signUpError) { flash('Failed: ' + signUpError.message); return }
-        const { error: insertError } = await supabase.from('admins').insert([{ id: signUpData.user.id, permissions: {} }])
+        const { error: insertError } = await supabase.from('admins').insert([{ id: signUpData.user.id, permissions: {}, email: adminForm.email }])
         if (insertError) { flash('Admin insert failed'); return }
         flash('Admin created')
         await sendWebhookNotification(user.email, 'New Regional Admin Added', `Email: ${adminForm.email}`)
@@ -279,14 +279,19 @@ export default function AdminDashboard() {
         if (!godMode) { flash('No permission'); return }
         const target = admins.find(a => a.id === adminId)
         if (!target || isGod(target)) return // can't modify god via UI
-        const current = target.permissions || {}
-        const updated = { ...current, [perm]: !current[perm] }
-        // Clean false values
-        Object.keys(updated).forEach(k => { if (!updated[k]) delete updated[k] })
-        await supabase.from('admins').update({ permissions: updated }).eq('id', adminId)
-        flash(`${PERMISSION_LABELS[perm]} ${updated[perm] ? 'granted' : 'revoked'}`)
-        await sendWebhookNotification(user.email, 'Permission Changed', `Admin ${adminId.slice(0, 8)}... → ${perm}: ${!!updated[perm]}`)
-        await loadData()
+        const current = target.permissions ? { ...target.permissions } : {}
+        const newVal = !current[perm]
+        if (newVal) {
+            current[perm] = true
+        } else {
+            delete current[perm]
+        }
+        const { error } = await supabase.from('admins').update({ permissions: current }).eq('id', adminId)
+        if (error) { flash('Save failed: ' + error.message); return }
+        // Update local state immediately
+        setAdmins(prev => prev.map(a => a.id === adminId ? { ...a, permissions: { ...current } } : a))
+        flash(`${PERMISSION_LABELS[perm]} ${newVal ? 'GRANTED' : 'REVOKED'}`)
+        await sendWebhookNotification(user.email, 'Permission Changed', `Admin ${target.email || adminId.slice(0, 8)} → ${perm}: ${newVal}`)
     }
 
     // ── INBOX ──
@@ -711,11 +716,12 @@ export default function AdminDashboard() {
                                 {admins.map(admin => {
                                     const adminIsGod = isGod(admin)
                                     const perms = admin.permissions || {}
+                                    const displayName = admin.email || admin.id.slice(0, 12) + '...'
                                     return (
                                         <div key={admin.id} className="p-4">
                                             <div className="flex items-center justify-between">
                                                 <div className="flex items-center gap-3">
-                                                    <span className="text-white font-[var(--font-mono)] text-xs">{admin.id.slice(0, 8)}...</span>
+                                                    <span className="text-white font-[var(--font-body)] text-sm font-semibold">{displayName}</span>
                                                     {adminIsGod && <span className="text-[var(--color-gold)] font-[var(--font-mono)] text-[10px] border border-[var(--color-gold)] px-1.5 py-0.5 rounded">GOD</span>}
                                                     {admin.id === user.id && <span className="text-[var(--color-captured)] font-[var(--font-mono)] text-[10px]">(you)</span>}
                                                 </div>
@@ -731,17 +737,14 @@ export default function AdminDashboard() {
                                                         const active = perms[perm] === true
                                                         return (
                                                             <button key={perm} onClick={() => handleTogglePermission(admin.id, perm)}
-                                                                className={`font-[var(--font-mono)] text-[10px] border px-2.5 py-1 rounded cursor-pointer transition-all ${active
-                                                                        ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]'
-                                                                        : 'bg-transparent text-[var(--color-text-muted)] border-[var(--color-border)] hover:border-white/30'
+                                                                className={`font-[var(--font-mono)] text-[11px] border px-3 py-1.5 rounded cursor-pointer transition-all ${active
+                                                                    ? 'bg-emerald-500/20 text-emerald-400 border-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.15)]'
+                                                                    : 'bg-transparent text-[var(--color-text-muted)] border-[var(--color-border)] hover:border-white/40 hover:text-white'
                                                                     }`}>
                                                                 {active ? '✓ ' : ''}{PERMISSION_LABELS[perm]}
                                                             </button>
                                                         )
                                                     })}
-                                                    <span className="text-[var(--color-text-muted)] font-[var(--font-mono)] text-[9px] self-center ml-1">
-                                                        ({Object.keys(perms).filter(k => perms[k]).length} active)
-                                                    </span>
                                                 </div>
                                             )}
                                         </div>

@@ -19,7 +19,7 @@ export default function App() {
             <Route
                 path="/admin"
                 element={
-                    <ProtectedRoute>
+                    <ProtectedRoute requireGod>
                         <AdminDashboard />
                     </ProtectedRoute>
                 }

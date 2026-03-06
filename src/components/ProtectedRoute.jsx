@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
-export default function ProtectedRoute({ children }) {
+export default function ProtectedRoute({ children, requireGod = false }) {
     const [authorized, setAuthorized] = useState(false)
     const [loading, setLoading] = useState(true)
     const navigate = useNavigate()
@@ -17,7 +17,7 @@ export default function ProtectedRoute({ children }) {
 
             const { data: admin } = await supabase
                 .from('admins')
-                .select('id')
+                .select('id, permissions')
                 .eq('id', user.id)
                 .single()
 
@@ -27,11 +27,17 @@ export default function ProtectedRoute({ children }) {
                 return
             }
 
+            // If god-level access is required, check permissions
+            if (requireGod && !(admin.permissions?.god === true)) {
+                navigate('/', { replace: true })
+                return
+            }
+
             setAuthorized(true)
             setLoading(false)
         }
         checkAuth()
-    }, [navigate])
+    }, [navigate, requireGod])
 
     if (loading) {
         return (
