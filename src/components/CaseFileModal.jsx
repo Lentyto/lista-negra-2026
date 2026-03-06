@@ -4,7 +4,8 @@ import { uploadToCloudinary } from '../lib/cloudinary'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 
-export default function CaseFileModal({ profile, onClose, onUpdate, isAdminInitially = false }) {
+export default function CaseFileModal({ profile: initialProfile, onClose, onUpdate, isAdminInitially = false }) {
+    const [profile, setProfile] = useState(initialProfile)
     const [isAdmin, setIsAdmin] = useState(isAdminInitially)
     const [pinEntry, setPinEntry] = useState('')
     const [pinError, setPinError] = useState('')
@@ -13,18 +14,27 @@ export default function CaseFileModal({ profile, onClose, onUpdate, isAdminIniti
 
     // Form state for updating Case File (Admins only)
     const [form, setForm] = useState({
-        height: profile.height || '',
-        remarks: profile.remarks || ''
+        height: initialProfile.height || '',
+        remarks: initialProfile.remarks || ''
     })
     const [photo1, setPhoto1] = useState(null)
     const [photo2, setPhoto2] = useState(null)
 
     const warrantRef = useRef(null)
 
+    // Re-fetch profile data to get latest
+    async function refreshProfile() {
+        const { data } = await supabase.from('profiles').select('*').eq('id', profile.id).single()
+        if (data) {
+            setProfile(data)
+            setForm({ height: data.height || '', remarks: data.remarks || '' })
+        }
+    }
+
     useEffect(() => {
-        // If not already known if admin, check
+        // If not already known if admin, check session
         async function checkAdmin() {
-            if (isAdminInitially) return;
+            if (isAdminInitially) return
             const { data: { user } } = await supabase.auth.getUser()
             if (user) {
                 const { data: admin } = await supabase.from('admins').select('id').eq('id', user.id).single()
@@ -51,15 +61,28 @@ export default function CaseFileModal({ profile, onClose, onUpdate, isAdminIniti
         setLoading(true)
         setMessage('')
         try {
-            const updates = { height: form.height, remarks: form.remarks }
+            const updates = {}
+            if (form.height !== undefined) updates.height = form.height
+            if (form.remarks !== undefined) updates.remarks = form.remarks
 
-            if (photo1) updates.extra_photo_1 = await uploadToCloudinary(photo1)
-            if (photo2) updates.extra_photo_2 = await uploadToCloudinary(photo2)
+            if (photo1) {
+                setMessage('Uploading photo 1...')
+                updates.extra_photo_1 = await uploadToCloudinary(photo1)
+            }
+            if (photo2) {
+                setMessage('Uploading photo 2...')
+                updates.extra_photo_2 = await uploadToCloudinary(photo2)
+            }
 
+            setMessage('Saving...')
             const { error } = await supabase.from('profiles').update(updates).eq('id', profile.id)
             if (error) throw error
 
-            setMessage('Case file updated')
+            // Refresh the profile locally
+            await refreshProfile()
+            setPhoto1(null)
+            setPhoto2(null)
+            setMessage('✓ Case file updated successfully')
             if (onUpdate) onUpdate()
         } catch (err) {
             setMessage('Error: ' + err.message)
@@ -70,12 +93,14 @@ export default function CaseFileModal({ profile, onClose, onUpdate, isAdminIniti
     async function generatePDF() {
         if (!warrantRef.current) return
         setLoading(true)
+        setMessage('Generating warrant PDF...')
         try {
-            // Give time for images to fully load if possible
             const canvas = await html2canvas(warrantRef.current, {
                 scale: 2,
                 useCORS: true,
-                backgroundColor: '#ffffff'
+                allowTaint: true,
+                backgroundColor: '#ffffff',
+                logging: false
             })
             const imgData = canvas.toDataURL('image/png')
             const pdf = new jsPDF('p', 'mm', 'a4')
@@ -84,146 +109,239 @@ export default function CaseFileModal({ profile, onClose, onUpdate, isAdminIniti
 
             pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight)
             pdf.save(`WARRANT_${profile.name.replace(/\s+/g, '_').toUpperCase()}.pdf`)
+            setMessage('✓ Warrant downloaded')
         } catch (err) {
-            console.error(err)
-            alert('Failed to generate PDF')
+            console.error('PDF generation error:', err)
+            setMessage('PDF error: ' + err.message)
         }
         setLoading(false)
     }
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
-            <div className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded w-full max-w-4xl flex flex-col md:flex-row shadow-2xl overflow-hidden my-auto max-h-[90vh]">
+    /* ──────────────────────────────────────────────
+       ALL styles inside the warrant div use ONLY
+       inline styles with hex/rgb colors so that
+       html2canvas can parse them (no oklch, no
+       CSS variables, no Tailwind classes).
+    ────────────────────────────────────────────── */
 
-                {/* PDF PREVIEW SECTION */}
-                <div className="flex-1 bg-gray-200 overflow-y-auto p-4 flex justify-center items-start">
+    return (
+        <div style={{
+            position: 'fixed', inset: 0, zIndex: 50,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backgroundColor: 'rgba(0,0,0,0.85)', padding: '16px', overflowY: 'auto'
+        }}>
+            <div style={{
+                display: 'flex', flexDirection: 'row', maxWidth: '1100px', width: '100%',
+                maxHeight: '90vh', borderRadius: '6px', overflow: 'hidden',
+                boxShadow: '0 25px 50px rgba(0,0,0,0.5)'
+            }}>
+
+                {/* ═══ PDF PREVIEW (left) ═══ */}
+                <div style={{
+                    flex: 1, backgroundColor: '#d1d5db', overflowY: 'auto',
+                    padding: '16px', display: 'flex', justifyContent: 'center', alignItems: 'flex-start'
+                }}>
                     <div
                         ref={warrantRef}
-                        className="bg-white text-black p-8 shadow-lg relative"
-                        style={{ width: '210mm', minHeight: '297mm', boxSizing: 'border-box' }}
+                        style={{
+                            width: '600px', minHeight: '850px', backgroundColor: '#ffffff',
+                            color: '#000000', padding: '40px', position: 'relative',
+                            fontFamily: "'Times New Roman', Times, serif", boxSizing: 'border-box',
+                            boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+                        }}
                     >
                         {/* Watermark */}
-                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-10">
-                            <h1 className="text-6xl font-black rotate-[-45deg] tracking-widest text-black">LISTANEGRA2026.COM</h1>
+                        <div style={{
+                            position: 'absolute', inset: 0, display: 'flex',
+                            alignItems: 'center', justifyContent: 'center',
+                            pointerEvents: 'none', opacity: 0.08
+                        }}>
+                            <div style={{
+                                fontSize: '48px', fontWeight: 900, letterSpacing: '6px',
+                                transform: 'rotate(-45deg)', color: '#000000',
+                                fontFamily: 'Arial, sans-serif'
+                            }}>LISTANEGRA2026.COM</div>
                         </div>
 
-                        {/* Warrant Header */}
-                        <div className="text-center border-b-4 border-black pb-4 mb-6 relative z-10">
-                            <h2 className="text-xl font-bold tracking-widest">OFFICIAL GOVERNMENT RECORD</h2>
-                            <h1 className="text-5xl font-black mt-2 mb-1 tracking-tighter">WANTED</h1>
-                            <h3 className="text-xl font-bold italic">REWARD: {profile.reward}</h3>
+                        {/* Header */}
+                        <div style={{
+                            textAlign: 'center', borderBottom: '4px solid #000000',
+                            paddingBottom: '16px', marginBottom: '24px', position: 'relative', zIndex: 1
+                        }}>
+                            <div style={{ fontSize: '11px', letterSpacing: '4px', color: '#555555', marginBottom: '4px' }}>
+                                LISTA NEGRA 2026
+                            </div>
+                            <div style={{ fontSize: '14px', fontWeight: 700, letterSpacing: '6px', color: '#333333' }}>
+                                OFFICIAL GOVERNMENT RECORD
+                            </div>
+                            <div style={{
+                                fontSize: '52px', fontWeight: 900, marginTop: '8px', marginBottom: '4px',
+                                letterSpacing: '8px', color: '#000000', fontFamily: 'Arial Black, Arial, sans-serif'
+                            }}>
+                                WANTED
+                            </div>
+                            <div style={{ fontSize: '18px', fontWeight: 700, fontStyle: 'italic', color: '#333333' }}>
+                                REWARD: {profile.reward}
+                            </div>
                         </div>
 
                         {/* Primary Info */}
-                        <div className="flex gap-6 mb-8 relative z-10">
-                            <div className="w-1/3 border-2 border-black p-1 bg-gray-100">
+                        <div style={{
+                            display: 'flex', gap: '24px', marginBottom: '32px',
+                            position: 'relative', zIndex: 1
+                        }}>
+                            <div style={{
+                                width: '180px', flexShrink: 0, border: '3px solid #000000',
+                                padding: '4px', backgroundColor: '#f3f4f6'
+                            }}>
                                 {profile.photo_url ? (
-                                    <img src={profile.photo_url} alt="Mugshot" className="w-full h-auto object-cover border border-black grayscale-[50%]" />
+                                    <img
+                                        src={profile.photo_url}
+                                        alt="Mugshot"
+                                        crossOrigin="anonymous"
+                                        style={{ width: '100%', height: 'auto', display: 'block', filter: 'grayscale(40%)' }}
+                                    />
                                 ) : (
-                                    <div className="w-full aspect-[3/4] flex items-center justify-center border border-black bg-gray-200 font-bold">NO PHOTO</div>
+                                    <div style={{
+                                        width: '100%', aspectRatio: '3/4', display: 'flex',
+                                        alignItems: 'center', justifyContent: 'center',
+                                        backgroundColor: '#e5e7eb', fontWeight: 700,
+                                        fontSize: '14px', color: '#666666'
+                                    }}>NO PHOTO</div>
                                 )}
                             </div>
-                            <div className="w-2/3 flex flex-col justify-center space-y-4">
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: '16px' }}>
                                 <div>
-                                    <p className="text-xs font-bold text-gray-500 uppercase">SUBJECT NAME</p>
-                                    <p className="text-3xl font-black uppercase border-b-2 border-black inline-block">{profile.name}</p>
+                                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#888888', letterSpacing: '2px' }}>SUBJECT NAME</div>
+                                    <div style={{
+                                        fontSize: '28px', fontWeight: 900, textTransform: 'uppercase',
+                                        borderBottom: '3px solid #000000', display: 'inline-block',
+                                        color: '#000000', fontFamily: 'Arial Black, Arial, sans-serif'
+                                    }}>{profile.name}</div>
                                 </div>
                                 <div>
-                                    <p className="text-xs font-bold text-gray-500 uppercase">KNOWN CRIMES</p>
-                                    <p className="text-xl font-bold text-red-700">{profile.crime}</p>
+                                    <div style={{ fontSize: '10px', fontWeight: 700, color: '#888888', letterSpacing: '2px' }}>KNOWN CRIMES</div>
+                                    <div style={{ fontSize: '18px', fontWeight: 700, color: '#b91c1c' }}>{profile.crime}</div>
                                 </div>
-                                <div className="flex gap-8">
+                                <div style={{ display: 'flex', gap: '32px' }}>
                                     <div>
-                                        <p className="text-xs font-bold text-gray-500 uppercase">HEIGHT / DETAILS</p>
-                                        <p className="text-lg font-semibold">{profile.height || 'UNKNOWN'}</p>
+                                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#888888', letterSpacing: '2px' }}>HEIGHT / DETAILS</div>
+                                        <div style={{ fontSize: '16px', fontWeight: 600, color: '#000000' }}>{profile.height || 'UNKNOWN'}</div>
                                     </div>
                                     <div>
-                                        <p className="text-xs font-bold text-gray-500 uppercase">STATUS</p>
-                                        <p className="text-lg font-bold">{profile.captured ? 'CAPTURED' : 'AT LARGE'}</p>
+                                        <div style={{ fontSize: '10px', fontWeight: 700, color: '#888888', letterSpacing: '2px' }}>STATUS</div>
+                                        <div style={{
+                                            fontSize: '16px', fontWeight: 700,
+                                            color: profile.captured ? '#16a34a' : '#b91c1c'
+                                        }}>{profile.captured ? 'CAPTURED' : 'AT LARGE'}</div>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
                         {/* Remarks */}
-                        <div className="mb-8 relative z-10">
-                            <p className="text-xs font-bold text-gray-500 uppercase border-b border-black mb-2">REMARKS / ADDITIONAL INTELLIGENCE</p>
-                            <p className="font-serif text-sm leading-relaxed whitespace-pre-wrap">{profile.remarks || 'No additional remarks at this time. Subject is considered unpredictable.'}</p>
+                        <div style={{ marginBottom: '32px', position: 'relative', zIndex: 1 }}>
+                            <div style={{
+                                fontSize: '10px', fontWeight: 700, color: '#888888',
+                                letterSpacing: '2px', borderBottom: '1px solid #000000',
+                                marginBottom: '8px', paddingBottom: '4px'
+                            }}>REMARKS / ADDITIONAL INTELLIGENCE</div>
+                            <div style={{
+                                fontSize: '13px', lineHeight: '1.6', whiteSpace: 'pre-wrap', color: '#222222'
+                            }}>{profile.remarks || 'No additional remarks at this time. Subject is considered unpredictable.'}</div>
                         </div>
 
                         {/* Extra Photos */}
                         {(profile.extra_photo_1 || profile.extra_photo_2) && (
-                            <div className="mb-8 relative z-10">
-                                <p className="text-xs font-bold text-gray-500 uppercase border-b border-black mb-3">ADDITIONAL EVIDENCE</p>
-                                <div className="flex gap-4">
+                            <div style={{ marginBottom: '32px', position: 'relative', zIndex: 1 }}>
+                                <div style={{
+                                    fontSize: '10px', fontWeight: 700, color: '#888888',
+                                    letterSpacing: '2px', borderBottom: '1px solid #000000',
+                                    marginBottom: '12px', paddingBottom: '4px'
+                                }}>ADDITIONAL EVIDENCE</div>
+                                <div style={{ display: 'flex', gap: '16px' }}>
                                     {profile.extra_photo_1 && (
-                                        <div className="w-1/2 border-2 border-black p-1 bg-gray-100">
-                                            <img src={profile.extra_photo_1} crossOrigin="anonymous" className="w-full h-auto object-cover grayscale-[30%]" alt="Evidence 1" />
+                                        <div style={{ width: '50%', border: '3px solid #000000', padding: '4px', backgroundColor: '#f3f4f6' }}>
+                                            <img src={profile.extra_photo_1} crossOrigin="anonymous" style={{ width: '100%', height: 'auto', display: 'block', filter: 'grayscale(30%)' }} alt="Evidence 1" />
                                         </div>
                                     )}
                                     {profile.extra_photo_2 && (
-                                        <div className="w-1/2 border-2 border-black p-1 bg-gray-100">
-                                            <img src={profile.extra_photo_2} crossOrigin="anonymous" className="w-full h-auto object-cover grayscale-[30%]" alt="Evidence 2" />
+                                        <div style={{ width: '50%', border: '3px solid #000000', padding: '4px', backgroundColor: '#f3f4f6' }}>
+                                            <img src={profile.extra_photo_2} crossOrigin="anonymous" style={{ width: '100%', height: 'auto', display: 'block', filter: 'grayscale(30%)' }} alt="Evidence 2" />
                                         </div>
                                     )}
                                 </div>
                             </div>
                         )}
 
-                        {/* Footer watermark */}
-                        <div className="absolute bottom-4 left-0 right-0 text-center font-mono text-[10px] text-gray-400">
-                            ISSUED BY LISTANEGRA2026.COM • DO NOT APPROACH
+                        {/* Footer */}
+                        <div style={{
+                            position: 'absolute', bottom: '16px', left: 0, right: 0,
+                            textAlign: 'center', fontSize: '9px', color: '#aaaaaa',
+                            letterSpacing: '2px', fontFamily: 'monospace'
+                        }}>
+                            ISSUED BY LISTANEGRA2026.COM · DO NOT APPROACH
                         </div>
                     </div>
                 </div>
 
-                {/* CONTROLS SECTION */}
-                <div className="w-full md:w-80 bg-[var(--color-surface)] border-l border-[var(--color-border)] p-5 flex flex-col overflow-y-auto">
+                {/* ═══ CONTROLS (right sidebar) ═══ */}
+                <div className="bg-[var(--color-surface)] border-l border-[var(--color-border)] p-5 flex flex-col overflow-y-auto"
+                    style={{ width: '320px', flexShrink: 0 }}>
+
                     <div className="flex justify-between items-center mb-6">
                         <h3 className="font-[var(--font-heading)] text-white tracking-widest text-lg">CASE FILE</h3>
-                        <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-white cursor-pointer transition-colors text-xl">✕</button>
+                        <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-white cursor-pointer transition-colors text-xl bg-transparent border-none">✕</button>
                     </div>
 
                     <button
                         onClick={generatePDF}
                         disabled={loading}
-                        className="btn-primary w-full mb-8 py-3 tracking-widest"
+                        className="btn-primary w-full mb-6 py-3 tracking-widest"
                     >
-                        {loading ? 'PROCESSING...' : 'DOWNLOAD WARRANT'}
+                        {loading ? 'PROCESSING...' : '⬇ DOWNLOAD WARRANT'}
                     </button>
 
+                    {message && (
+                        <p className="text-[var(--color-gold)] font-[var(--font-mono)] text-xs text-center mb-4">{message}</p>
+                    )}
+
                     {isAdmin ? (
-                        <form onSubmit={handleSave} className="space-y-4 border-t border-[var(--color-border)] pt-6">
-                            <h4 className="text-[var(--color-gold)] font-[var(--font-mono)] text-sm mb-4">ADMIN EDIT</h4>
+                        <form onSubmit={handleSave} className="space-y-4 border-t border-[var(--color-border)] pt-5">
+                            <h4 className="text-[var(--color-gold)] font-[var(--font-mono)] text-sm mb-2">ADMIN EDIT</h4>
 
                             <div>
                                 <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-[10px] mb-1">HEIGHT / DETAILS</label>
-                                <input type="text" value={form.height} onChange={e => setForm({ ...form, height: e.target.value })} className="admin-input" />
+                                <input type="text" value={form.height} onChange={e => setForm({ ...form, height: e.target.value })} className="admin-input" placeholder="e.g. 5'11" />
                             </div>
 
                             <div>
                                 <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-[10px] mb-1">REMARKS</label>
-                                <textarea value={form.remarks} onChange={e => setForm({ ...form, remarks: e.target.value })} className="admin-input h-24 whitespace-pre-wrap"></textarea>
+                                <textarea value={form.remarks} onChange={e => setForm({ ...form, remarks: e.target.value })} className="admin-input" rows={4} placeholder="Additional intelligence..."></textarea>
                             </div>
 
                             <div>
-                                <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-[10px] mb-1">EVIDENCE PHOTO 1 {profile.extra_photo_1 && '(Exists)'}</label>
-                                <input type="file" accept="image/*" onChange={e => setPhoto1(e.target.files[0])} className="text-[10px] text-[var(--color-text-muted)] w-full" />
+                                <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-[10px] mb-1">
+                                    EVIDENCE PHOTO 1 {profile.extra_photo_1 && <span className="text-[var(--color-captured)]">✓ exists</span>}
+                                </label>
+                                <input type="file" accept="image/*" onChange={e => setPhoto1(e.target.files[0])}
+                                    className="text-[10px] text-[var(--color-text-muted)] w-full" />
                             </div>
 
                             <div>
-                                <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-[10px] mb-1">EVIDENCE PHOTO 2 {profile.extra_photo_2 && '(Exists)'}</label>
-                                <input type="file" accept="image/*" onChange={e => setPhoto2(e.target.files[0])} className="text-[10px] text-[var(--color-text-muted)] w-full" />
+                                <label className="block text-[var(--color-text-muted)] font-[var(--font-mono)] text-[10px] mb-1">
+                                    EVIDENCE PHOTO 2 {profile.extra_photo_2 && <span className="text-[var(--color-captured)]">✓ exists</span>}
+                                </label>
+                                <input type="file" accept="image/*" onChange={e => setPhoto2(e.target.files[0])}
+                                    className="text-[10px] text-[var(--color-text-muted)] w-full" />
                             </div>
 
-                            <button type="submit" disabled={loading} className="btn-outline w-full py-2 text-xs">
-                                {loading ? 'SAVING...' : 'SAVE ENHANCEMENTS'}
+                            <button type="submit" disabled={loading} className="btn-primary w-full py-2 text-xs tracking-wider">
+                                {loading ? 'SAVING...' : 'SAVE CASE FILE'}
                             </button>
-
-                            {message && <p className="text-[var(--color-gold)] font-[var(--font-mono)] text-xs text-center mt-2">{message}</p>}
                         </form>
                     ) : (
-                        <div className="border-t border-[var(--color-border)] pt-6 mt-auto">
+                        <div className="border-t border-[var(--color-border)] pt-5 mt-auto">
                             <h4 className="text-[var(--color-text-muted)] font-[var(--font-mono)] text-[10px] mb-3">ADMIN OVERRIDE:</h4>
                             <form onSubmit={handlePinSubmit} className="flex gap-2">
                                 <input
@@ -231,8 +349,9 @@ export default function CaseFileModal({ profile, onClose, onUpdate, isAdminIniti
                                     placeholder="PIN"
                                     value={pinEntry}
                                     onChange={e => setPinEntry(e.target.value)}
-                                    maxLength={4}
-                                    className="admin-input flex-1 !text-center tracking-[0.5em]"
+                                    maxLength={10}
+                                    className="admin-input flex-1"
+                                    style={{ textAlign: 'center', letterSpacing: '0.3em' }}
                                 />
                                 <button type="submit" className="btn-outline text-[10px] px-3">UNLOCK</button>
                             </form>
