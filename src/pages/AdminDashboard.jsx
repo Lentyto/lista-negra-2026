@@ -62,31 +62,36 @@ export default function AdminDashboard() {
         const { data: row } = await supabase.from('admins').select('*').eq('id', user.id).single()
         setAdminRow(row)
 
-        const { data: profilesData } = await supabase.from('profiles').select('*')
-            .order('priority', { ascending: true }).order('created_at', { ascending: false })
-        setProfiles(profilesData || [])
-
-        const { data: pinsData } = await supabase.from('pins').select('*')
-        setPins(pinsData || [])
-        const edits = {}
-        pinsData?.forEach(p => { edits[p.id] = p.pin_value })
-        setPinEdits(edits)
-
-        const { data: lockdownData } = await supabase.from('settings').select('value').eq('key', 'lockdown').single()
-        setLockdown(lockdownData?.value === 'true')
-
-        const { data: announcementsData } = await supabase.from('announcements').select('*').order('created_at', { ascending: false })
-        setAnnouncements(announcementsData || [])
-
-        const { data: salasData } = await supabase.from('salas_media').select('*').order('posted_date', { ascending: false })
-        setSalasItems(salasData || [])
-
-        const { data: inboxData } = await supabase.from('inbox').select('*').order('created_at', { ascending: false })
-        setInboxItems(inboxData || [])
+        const promises = [
+            supabase.from('profiles').select('*').order('priority', { ascending: true }).order('created_at', { ascending: false }),
+            supabase.from('pins').select('*'),
+            supabase.from('settings').select('value').eq('key', 'lockdown').single(),
+            supabase.from('announcements').select('*').order('created_at', { ascending: false }),
+            supabase.from('salas_media').select('*').order('posted_date', { ascending: false }),
+            supabase.from('inbox').select('*').order('created_at', { ascending: false })
+        ]
 
         if (isGod(row)) {
-            const { data: adminsData } = await supabase.from('admins').select('*')
-            setAdmins(adminsData || [])
+            promises.push(supabase.from('admins').select('*'))
+        }
+
+        const results = await Promise.all(promises)
+
+        setProfiles(results[0].data || [])
+
+        const pinsData = results[1].data || []
+        setPins(pinsData)
+        const edits = {}
+        pinsData.forEach(p => { edits[p.id] = p.pin_value })
+        setPinEdits(edits)
+
+        setLockdown(results[2].data?.value === 'true')
+        setAnnouncements(results[3].data || [])
+        setSalasItems(results[4].data || [])
+        setInboxItems(results[5].data || [])
+
+        if (isGod(row)) {
+            setAdmins(results[6].data || [])
         }
 
         setLoading(false)

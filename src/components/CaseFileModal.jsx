@@ -1,14 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { uploadToCloudinary } from '../lib/cloudinary'
+import { hasPermission } from '../lib/permissions'
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 
 export default function CaseFileModal({ profile: initialProfile, onClose, onUpdate, isAdminInitially = false }) {
     const [profile, setProfile] = useState(initialProfile)
     const [isAdmin, setIsAdmin] = useState(isAdminInitially)
-    const [pinEntry, setPinEntry] = useState('')
-    const [pinError, setPinError] = useState('')
     const [loading, setLoading] = useState(false)
     const [message, setMessage] = useState('')
 
@@ -32,30 +31,19 @@ export default function CaseFileModal({ profile: initialProfile, onClose, onUpda
     }
 
     useEffect(() => {
-        // If not already known if admin, check session
+        // If not already known if admin, check session + granular permissions
         async function checkAdmin() {
             if (isAdminInitially) return
             const { data: { user } } = await supabase.auth.getUser()
             if (user) {
-                const { data: admin } = await supabase.from('admins').select('id').eq('id', user.id).single()
-                if (admin) setIsAdmin(true)
+                const { data: admin } = await supabase.from('admins').select('*').eq('id', user.id).single()
+                if (admin && hasPermission(admin, 'edit')) {
+                    setIsAdmin(true)
+                }
             }
         }
         checkAdmin()
     }, [isAdminInitially])
-
-    async function handlePinSubmit(e) {
-        e.preventDefault()
-        const { data: pins } = await supabase.from('pins').select('pin_value').eq('label', 'admin').single()
-        if (pinEntry === pins?.pin_value) {
-            setIsAdmin(true)
-            setPinError('')
-        } else {
-            setPinError('Invalid Admin PIN')
-        }
-        setPinEntry('')
-    }
-
     async function handleSave(e) {
         e.preventDefault()
         setLoading(true)
@@ -306,7 +294,7 @@ export default function CaseFileModal({ profile: initialProfile, onClose, onUpda
                         <p className="text-[var(--color-gold)] font-[var(--font-mono)] text-xs text-center mb-4">{message}</p>
                     )}
 
-                    {isAdmin ? (
+                    {isAdmin && (
                         <form onSubmit={handleSave} className="space-y-4 border-t border-[var(--color-border)] pt-5">
                             <h4 className="text-[var(--color-gold)] font-[var(--font-mono)] text-sm mb-2">ADMIN EDIT</h4>
 
@@ -340,23 +328,6 @@ export default function CaseFileModal({ profile: initialProfile, onClose, onUpda
                                 {loading ? 'SAVING...' : 'SAVE CASE FILE'}
                             </button>
                         </form>
-                    ) : (
-                        <div className="border-t border-[var(--color-border)] pt-5 mt-auto">
-                            <h4 className="text-[var(--color-text-muted)] font-[var(--font-mono)] text-[10px] mb-3">ADMIN OVERRIDE:</h4>
-                            <form onSubmit={handlePinSubmit} className="flex gap-2">
-                                <input
-                                    type="password"
-                                    placeholder="PIN"
-                                    value={pinEntry}
-                                    onChange={e => setPinEntry(e.target.value)}
-                                    maxLength={10}
-                                    className="admin-input flex-1"
-                                    style={{ textAlign: 'center', letterSpacing: '0.3em' }}
-                                />
-                                <button type="submit" className="btn-outline text-[10px] px-3">UNLOCK</button>
-                            </form>
-                            {pinError && <p className="text-[var(--color-accent)] font-[var(--font-mono)] text-[10px] mt-2">{pinError}</p>}
-                        </div>
                     )}
                 </div>
             </div>

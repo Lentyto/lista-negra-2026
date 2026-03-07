@@ -43,13 +43,13 @@ export default function Gallery() {
 
             setAuthorized(true)
 
-            await fetchProfilesData()
+            const [profilesRes, announcementsRes] = await Promise.all([
+                supabase.from('profiles').select('*').order('priority', { ascending: true }).order('created_at', { ascending: false }),
+                supabase.from('announcements').select('*').order('created_at', { ascending: false }).limit(5)
+            ])
 
-            const { data: announcementsData } = await supabase
-                .from('announcements').select('*')
-                .order('created_at', { ascending: false })
-                .limit(5)
-            setAnnouncements(announcementsData || [])
+            setProfiles(profilesRes.data || [])
+            setAnnouncements(announcementsRes.data || [])
 
             setLoading(false)
         }
